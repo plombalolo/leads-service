@@ -6,7 +6,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
-import { FindLeadsDto } from 'src/dto/find-leads.dto';
+import { FindLeadsDto } from '../dto/find-leads.dto';
 
 @Injectable()
 export class LeadsService {
