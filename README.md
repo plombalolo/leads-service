@@ -1,98 +1,117 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Leads Service
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Невеликий backend-сервіс для прийому та обробки заявок клієнтів (leads).
+Побудований на **NestJS + Prisma + PostgreSQL**.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Стек
 
-## Description
+- **NestJS 11** — фреймворк, модульна архітектура (Controller → Service → Prisma)
+- **Prisma ORM** + **PostgreSQL 15** — зберігання даних
+- **class-validator / class-transformer** — валідація вхідних DTO (body та query)
+- **Docker Compose** — підняття локальної БД
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Архітектура
 
-## Project setup
-
-```bash
-$ npm install
+```
+src/
+├── leads/
+│   ├── leads.controller.ts   # HTTP-шар: POST/GET/PATCH/DELETE /leads
+│   ├── leads.service.ts      # бізнес-логіка: дублікати, статус, webhook
+│   └── leads.module.ts
+├── dto/
+│   ├── create-lead.dto.ts    # валідація тіла POST /leads
+│   ├── find-leads.dto.ts     # валідація query-параметрів GET /leads
+│   └── update-lead.dto.ts    # PartialType від CreateLeadDto
+├── prisma/
+│   ├── prisma.service.ts     # обгортка над PrismaClient (connect/disconnect)
+│   └── prisma.module.ts
+├── app.module.ts             # кореневий модуль, підключає ConfigModule/Prisma/Leads
+└── main.ts                   # bootstrap, глобальний ValidationPipe
 ```
 
-## Compile and run the project
+Логіка розділена на три шари:
+- **Controller** — тільки маршрутизація та парсинг body/query через DTO, без бізнес-правил;
+- **Service** — уся бізнес-логіка (перевірка дубля, визначення статусу, виклик вебхука);
+- **Prisma layer** — доступ до БД, ізольований в окремому модулі, щоб його можна було замінити/мокати в тестах.
 
-```bash
-# development
-$ npm run start
+Глобально в `main.ts` підключено `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })` — відсікає зайві поля, валідує і body, і query-параметри (наприклад, некоректний `sortBy` у `GET /leads` поверне 400, а не впаде на рівні Prisma).
 
-# watch mode
-$ npm run start:dev
+## Структура БД
 
-# production mode
-$ npm run start:prod
-```
+Модель `Lead` (`prisma/schema.prisma`):
 
-## Run tests
+| Поле        | Тип      | Опис                                   |
+|-------------|----------|-----------------------------------------|
+| id          | String   | UUID, первинний ключ                    |
+| name        | String   | Ім'я клієнта                            |
+| email       | String   | Email клієнта                           |
+| country     | String   | Країна                                  |
+| serviceType | String   | Тип послуги                             |
+| budget      | Float    | Бюджет                                  |
+| comment     | String?  | Коментар (необов'язково)                |
+| status      | String   | `new` \| `priority`, визначається сервером |
+| createdAt   | DateTime | Дата створення (за замовчуванням `now()`) |
 
-```bash
-# unit tests
-$ npm run test
+Індекс `[email, createdAt]` — під запит перевірки дубля заявки за email протягом 24 годин.
 
-# e2e tests
-$ npm run test:e2e
+## API
 
-# test coverage
-$ npm run test:cov
-```
+### `POST /leads`
+Створює заявку.
+- Валідує обов'язкові поля (`name`, `email`, `country`, `serviceType`, `budget`) через `CreateLeadDto`.
+- Відхиляє запит (400), якщо заявка з таким email вже була створена за останні 24 години.
+- Автоматично визначає статус: `budget >= 10000` → `priority`, інакше → `new`.
+- Якщо статус `priority` — асинхронно (fire-and-forget) відправляє заявку на `WEBHOOK_URL`. Помилка вебхука **не** впливає на збереження заявки — вона логується і йде окремо від основного потоку.
 
-## Deployment
+### `GET /leads`
+Повертає список заявок, параметри валідуються через `FindLeadsDto`:
+- `search` — пошук за іменем або email (`contains`, без урахування регістру);
+- `status`, `country` — точна фільтрація;
+- `sortBy` (`budget` | `createdAt`), `sortOrder` (`asc` | `desc`) — сортування, за замовчуванням `createdAt desc`. Будь-яке інше значення відхиляється валідацією (400).
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+### `GET /leads/:id`, `PATCH /leads/:id`, `DELETE /leads/:id`
+Додано понад мінімальні вимоги ТЗ — для зручного керування окремою заявкою (перегляд, редагування, видалення). Кидають 404, якщо заявки з таким id немає.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## Обробка помилок
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+- **Валідація вхідних даних** — глобальний `ValidationPipe`: некоректні, відсутні або зайві поля (і в body, і в query) відхиляються з 400 ще до контролера.
+- **Дублікат заявки** — `BadRequestException` (400) з описом причини.
+- **Заявку не знайдено** — `NotFoundException` (404) у `findOne`, яким також користуються `update`/`remove`.
+- **Недоступність зовнішнього вебхука** — не кидає виняток користувачу: `fetch` не await-иться в основному потоці, помилка ловиться в `.catch()` і логується в консоль. Заявка вже збережена в БД до виклику вебхука, тому вона гарантовано зберігається незалежно від стану зовнішнього сервісу.
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Запуск проєкту
 
-## Resources
+1. Підняти БД:
+   ```bash
+   docker compose up -d
+   ```
+2. Скопіювати `.env.example` в `.env` і за потреби підставити свій `WEBHOOK_URL` (наприклад, з webhook.site):
+   ```bash
+   cp .env.example .env
+   ```
+3. Встановити залежності і застосувати міграції:
+   ```bash
+   npm install
+   npm run db:migrate
+   ```
+4. Запустити сервіс:
+   ```bash
+   npm run start:dev
+   ```
 
-Check out a few resources that may come in handy when working with NestJS:
+### Змінні середовища
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+| Змінна        | Опис                                              | Приклад |
+|---------------|----------------------------------------------------|---------|
+| DATABASE_URL  | Рядок підключення до Postgres                       | `postgresql://root:rootpassword@localhost:5432/leads_db?schema=public` |
+| PORT          | Порт застосунку (необов'язково, за замовчуванням 3000) | `3000` |
+| WEBHOOK_URL   | Куди відправляти `priority`-заявки                  | `https://webhook.site/...` |
 
-## Support
+## Що зроблено за допомогою AI
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+Заявку допомагав розробляти Claude: прискорення написання шаблонного Nest/Prisma-коду (DTO, контролер, сервіс), а також повторний рев'ю коду на відповідність ТЗ.
 
-## Stay in touch
+## Відомі обмеження
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- Перевірка дубля email за 24 години робиться як окремий SELECT перед INSERT (не в транзакції) — за високого паралелізму теоретично можливий race condition (дві одночасні заявки з одним email пройдуть перевірку одночасно). Для продакшн-версії варто винести це в транзакцію з серіалізованим рівнем ізоляції або додати часткове унікальне обмеження на рівні БД.
+- Юніт/e2e-тестів на `/leads` наразі немає — покриті лише дефолтний `AppController` (успадкований зі стартового шаблону Nest).
