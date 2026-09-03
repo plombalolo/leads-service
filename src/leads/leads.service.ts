@@ -6,13 +6,13 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateLeadDto } from '../dto/create-lead.dto';
 import { UpdateLeadDto } from '../dto/update-lead.dto';
+import { FindLeadsDto } from 'src/dto/find-leads.dto';
 
 @Injectable()
 export class LeadsService {
   constructor(private prisma: PrismaService) {}
 
   async create(createLeadDto: CreateLeadDto) {
-    // 1. Перевірка на повторну заявку з однаковим email протягом 24 годин
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const existingLead = await this.prisma.lead.findFirst({
       where: {
@@ -29,7 +29,6 @@ export class LeadsService {
 
     const status = createLeadDto.budget >= 10000 ? 'priority' : 'new';
 
-    // 3. Збереження в БД
     const lead = await this.prisma.lead.create({
       data: {
         ...createLeadDto,
@@ -52,13 +51,7 @@ export class LeadsService {
     return lead;
   }
 
-  async findAll(query: {
-    search?: string;
-    status?: string;
-    country?: string;
-    sortBy?: 'budget' | 'createdAt';
-    sortOrder?: 'asc' | 'desc';
-  }) {
+  async findAll(query: FindLeadsDto) {
     const {
       search,
       status,
